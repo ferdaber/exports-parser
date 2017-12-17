@@ -13,15 +13,16 @@
     "dependencies": {
         "babylon": "^6.18.0",
         "camelcase": "^4.1.0",
-        "pretty-format": "^21.2.1",
-        "resolve-cwd": "^2.0.0",
+        "chalk": "^2.3.0",
+        "resolve": "^1.5.0",
         "yargs": "^10.0.3"
     },
     "devDependencies": {
         "@types/babylon": "^6.16.2",
         "@types/camelcase": "^4.1.0",
+        "@types/chalk": "^2.2.0",
         "@types/node": "^8.5.1",
-        "@types/pretty-format": "^20.0.0",
+        "@types/resolve": "0.0.4",
         "@types/yargs": "^10.0.0"
     }
 }

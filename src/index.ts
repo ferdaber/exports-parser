@@ -1,7 +1,9 @@
-import { readFileSync } from 'fs'
-import { resolve, parse } from 'path'
 import * as camelcase from 'camelcase'
 import * as Babel from 'babel-types'
+import * as resolve from 'resolve'
+import chalk from 'chalk'
+import { readFileSync } from 'fs'
+import { parse } from 'path'
 
 import { parseWithBabel } from './babel-parse'
 import { flatten } from './helpers'
@@ -51,18 +53,32 @@ export function findExports(fileContent: string, absoluteFilePath: string, isJso
         const rootIdentifiers = findRootObjectIdentifiers(astBody)
         return findExportNames(astBody, moduleExportsAliases, absoluteFilePath, rootIdentifiers)
     } catch (error) {
-        console.error(`Error parsing file ${absoluteFilePath}.`)
+        const name = chalk.bold.bgRedBright.whiteBright('ERROR')
+        let message = `Parsing file ${absoluteFilePath}. `
         if (debugLocation) {
-            console.error(
-                `Error occurred between lines ${debugLocation.start.line} and ${
-                    debugLocation.end.line
-                } in the source file.`
-            )
+            message += `Occurred between lines ${debugLocation.start.line} and ${
+                debugLocation.end.line
+            } in the source file.`
         }
-        throw error
+        message += chalk.bold('\n\nOriginal Error Info:') + `\n${error.name}: ${error.message}`
+        throw Object.assign(new Error(), error, {
+            name,
+            message
+        })
     }
 }
 export default findExports
+
+export function guessDefaultExport(absoluteFilePath: string) {
+    // try to assing a default export name when none was found but a default export exists
+    let { dir, name } = parse(absoluteFilePath)
+    while (GENERIC_NAMES.some(ignore => name === ignore)) {
+        const pathInfo = parse(dir)
+        name = pathInfo.name
+        dir = pathInfo.dir
+    }
+    return camelcase(name)
+}
 
 function findModuleBody(ast: Babel.File) {
     const body = ast.program.body
@@ -167,15 +183,11 @@ function findExportNames(
         addESExports(moduleExports, statement)
         addCJSExports(moduleExports, statement, moduleExportsAliases, absoluteFilePath, rootIdentifiers)
     })
+    // try to assing a default export name when none was found but a default export exists
     if (moduleExports.hasDefaultExport && !moduleExports.defaultExportName) {
-        let { dir, name } = parse(absoluteFilePath)
-        while (GENERIC_NAMES.some(ignore => name === ignore)) {
-            const pathInfo = parse(dir)
-            name = pathInfo.name
-            dir = pathInfo.dir
-        }
-        moduleExports.defaultExportName = camelcase(name)
+        moduleExports.defaultExportName = guessDefaultExport(absoluteFilePath)
     }
+    // filter out common __esModule interop export
     moduleExports.namedExports = moduleExports.namedExports.filter(name => name !== '__esModule')
     return moduleExports
 }
@@ -244,85 +256,120 @@ function addCJSExports(
             moduleExports.namedExports.push(name.value)
         }
         if (expression.type === 'AssignmentExpression') {
-            // module.exports = ... or any of its aliases
-            if (isExpressionAccessInSet(moduleExportsAliases, <Babel.Expression>expression.left)) {
-                let { right } = expression
-                // module.exports = ... ? true : false
-                // resolve ternary expressions in exports to the 'true' outcome
-                while (right.type === 'ConditionalExpression') {
-                    right = right.consequent
+            addCJSExportsInAssignment(
+                moduleExports,
+                expression,
+                moduleExportsAliases,
+                absoluteFilePath,
+                rootIdentifiers
+            )
+        }
+    }
+    if (statement.type === 'VariableDeclaration') {
+        statement.declarations.forEach(declarator => {
+            if (declarator.init && declarator.init.type === 'AssignmentExpression') {
+                addCJSExportsInAssignment(
+                    moduleExports,
+                    declarator.init,
+                    moduleExportsAliases,
+                    absoluteFilePath,
+                    rootIdentifiers
+                )
+            }
+        })
+    }
+    return moduleExports
+}
+
+function addCJSExportsInAssignment(
+    moduleExports: ModuleExports,
+    expression: Babel.AssignmentExpression,
+    moduleExportsAliases: Set<string>,
+    absoluteFilePath: string,
+    rootIdentifiers: Map<string, string | string[]>
+) {
+    if (expression.right.type === 'AssignmentExpression') {
+        addCJSExportsInAssignment(
+            moduleExports,
+            expression.right,
+            moduleExportsAliases,
+            absoluteFilePath,
+            rootIdentifiers
+        )
+    }
+    // module.exports = ... or any of its aliases
+    if (isExpressionAccessInSet(moduleExportsAliases, <Babel.Expression>expression.left)) {
+        let { right } = expression
+        // module.exports = ... ? true : false
+        // resolve ternary expressions in exports to the 'true' outcome
+        while (right.type === 'ConditionalExpression') {
+            right = right.consequent
+        }
+        // module.exports = require('other-module')
+        if (
+            right.type === 'CallExpression' &&
+            right.callee.type === 'Identifier' &&
+            right.callee.name === 'require' &&
+            right.arguments.length &&
+            right.arguments[0].type === 'StringLiteral'
+        ) {
+            const importPath = (<Babel.StringLiteral>right.arguments[0]).value
+            const resolvedImportPath = resolve.sync(importPath, {
+                basedir: parse(absoluteFilePath).dir,
+                extensions: ['.js', '.jsx', '.json', '.node']
+            })
+            const fileContent = readFileSync(resolvedImportPath, 'utf8')
+            Object.assign(moduleExports, findExports(fileContent, resolvedImportPath))
+        } else {
+            moduleExports.hasDefaultExport = true
+            const typeMap = expressionTypeNameSwitchMap[right.type]
+            const names =
+                right.type === 'Identifier' && rootIdentifiers.has(right.name)
+                    ? // module.exports = myExports (where myExports was already defined)
+                      // resolve indirect reference
+                      rootIdentifiers.get(right.name)
+                    : typeMap && typeMap(right)
+            // module.exports = { exportA: ..., exportB, exportC(): {...}, ... }
+            if (Array.isArray(names)) {
+                moduleExports.namedExports = names
+            } else if (names != null) {
+                // module.exports = literal/function/class
+                moduleExports.defaultExportName = names
+            }
+        }
+    } else {
+        // module.exports.foo = ... or any of its aliases
+        let object = expression.left as Babel.Expression,
+            property: Babel.Expression | undefined,
+            parentProperty: Babel.Expression | undefined
+        while (object.type === 'MemberExpression') {
+            parentProperty = property
+            property = object.property
+            object = object.object
+        }
+        const objectName = getIdName(object)
+        if (objectName && property) {
+            const propName = getIdName(property)
+            // module.exports.foo =
+            const name =
+                parentProperty && moduleExportsAliases.has(`${objectName}.${propName}`)
+                    ? getIdName(parentProperty)
+                    : // exports.foo = ...
+                      moduleExportsAliases.has(objectName) ? propName : undefined
+            // module.exports.default = foo
+            if (name === 'default') {
+                moduleExports.hasDefaultExport = true
+                if (expression.right.type === 'Identifier') {
+                    const isIndirectReference =
+                        rootIdentifiers.has(expression.right.name) &&
+                        !Array.isArray(rootIdentifiers.get(expression.right.name))
+                    moduleExports.defaultExportName = isIndirectReference
+                        ? (rootIdentifiers.get(expression.right.name) as string)
+                        : expression.right.name
                 }
-                // module.exports = require('other-module')
-                if (
-                    right.type === 'CallExpression' &&
-                    right.callee.type === 'Identifier' &&
-                    right.callee.name === 'require' &&
-                    right.arguments.length &&
-                    right.arguments[0].type === 'StringLiteral'
-                ) {
-                    const importPath = (<Babel.StringLiteral>right.arguments[0]).value
-                    const absoluteDir = parse(absoluteFilePath).dir
-                    let resolvedImportPath = resolve(absoluteDir, importPath)
-                    if (!/\.(js|jsx)$/.test(resolvedImportPath)) {
-                        resolvedImportPath += '.js'
-                    }
-                    try {
-                        const fileContent = readFileSync(resolvedImportPath, 'utf8')
-                        Object.assign(moduleExports, findExports(fileContent, resolvedImportPath))
-                    } catch (e) {}
-                }
-                const typeMap = expressionTypeNameSwitchMap[right.type]
-                const names =
-                    right.type === 'Identifier' && rootIdentifiers.has(right.name)
-                        ? // module.exports = myExports (where myExports was already defined)
-                          // resolve indirect reference
-                          rootIdentifiers.get(right.name)
-                        : typeMap && typeMap(right)
-                // module.exports = { exportA: ..., exportB, exportC(): {...}, ... }
-                if (Array.isArray(names)) {
-                    moduleExports.namedExports = names
-                } else {
-                    moduleExports.hasDefaultExport = true
-                    if (names != null) {
-                        // module.exports = literal/function/class
-                        moduleExports.defaultExportName = names
-                    }
-                }
-            } else {
-                // module.exports.foo = ... or any of its aliases
-                let object = expression.left as Babel.Expression,
-                    property: Babel.Expression | undefined,
-                    parentProperty: Babel.Expression | undefined
-                while (object.type === 'MemberExpression') {
-                    parentProperty = property
-                    property = object.property
-                    object = object.object
-                }
-                const objectName = getIdName(object)
-                if (objectName && property) {
-                    const propName = getIdName(property)
-                    // module.exports.foo =
-                    const name =
-                        parentProperty && moduleExportsAliases.has(`${objectName}.${propName}`)
-                            ? getIdName(parentProperty)
-                            : // exports.foo = ...
-                              moduleExportsAliases.has(objectName) ? propName : undefined
-                    // module.exports.default = foo
-                    if (name === 'default') {
-                        if (
-                            expression.right.type === 'Identifier' &&
-                            rootIdentifiers.has(expression.right.name) &&
-                            !Array.isArray(rootIdentifiers.get(expression.right.name))
-                        ) {
-                            moduleExports.hasDefaultExport = true
-                            moduleExports.defaultExportName = rootIdentifiers.get(expression.right.name) as string
-                        }
-                    } else if (name) {
-                        moduleExports.namedExports.push(name)
-                    }
-                }
+            } else if (name) {
+                moduleExports.namedExports.push(name)
             }
         }
     }
-    return moduleExports
 }
