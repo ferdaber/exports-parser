@@ -1,0 +1,27 @@
+{
+    "name": "@ferdaber/exports-parser",
+    "version": "1.0.0",
+    "description": "",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "main": "src/index.js",
+    "bin": "dist/cli.js",
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "babylon": "^6.18.0",
+        "camelcase": "^4.1.0",
+        "pretty-format": "^21.2.1",
+        "resolve-cwd": "^2.0.0",
+        "yargs": "^10.0.3"
+    },
+    "devDependencies": {
+        "@types/babylon": "^6.16.2",
+        "@types/camelcase": "^4.1.0",
+        "@types/node": "^8.5.1",
+        "@types/pretty-format": "^20.0.0",
+        "@types/yargs": "^10.0.0"
+    }
+}
