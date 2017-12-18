@@ -1,4 +1,5 @@
 import chalk from 'chalk'
+import { ModuleExports } from '../types'
 
 export function flatten<T>(array: (T | T[] | undefined)[]) {
     const filteredArray = array.filter(Boolean) as (T | T[])[]

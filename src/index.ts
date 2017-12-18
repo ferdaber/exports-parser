@@ -18,6 +18,7 @@ import {
     isIdentifierNamed,
     isMemberExpressionAccessing
 } from './babel-helpers'
+import { ModuleExports } from '../types'
 
 type ExportDefaultDeclarationType = Babel.ExportDefaultDeclaration['declaration']
 

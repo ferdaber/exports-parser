@@ -1,15 +1,25 @@
 {
-    "name": "@ferdaber/exports-parser",
-    "version": "1.0.0",
-    "description": "",
+    "name": "exports-parser",
+    "version": "0.0.1",
+    "description": "Sort your exports",
     "scripts": {
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "build": "node_modules/.bin/tsc",
+        "build-watch": "npm run build -- --watch"
     },
-    "main": "src/index.js",
+    "main": "dist/index.js",
     "bin": "dist/cli.js",
-    "keywords": [],
-    "author": "",
+    "keywords": [
+        "exports",
+        "parse"
+    ],
+    "author": "Ferdy Budhidharma",
     "license": "ISC",
+    "files": [
+        "dist",
+        "types.d.ts",
+        "src"
+    ],
+    "types": "types.d.ts",
     "dependencies": {
         "babylon": "^6.18.0",
         "camelcase": "^4.1.0",
