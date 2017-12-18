@@ -26,7 +26,8 @@ interface ModuleExports {
 
 type ExportDefaultDeclarationType = Babel.ExportDefaultDeclaration['declaration']
 
-const GENERIC_NAMES = ['dist', 'bin', 'lib', 'src', 'index']
+const IGNORE_FILENAMES = new Set(['dist', 'dist-modules', 'bin', 'build', 'lib', 'src', 'test', 'index'])
+const IGNORE_EXPORT_NAMES = new Set(['__esModule', 'function', 'class', 'require', 'exports', 'factory', '_extends'])
 
 let debugLocation: Babel.SourceLocation
 
@@ -51,7 +52,7 @@ export function findExports(fileContent: string, absoluteFilePath: string, isJso
         }
         const moduleExportsAliases = findModuleExportsAliases(astBody)
         const rootIdentifiers = findRootObjectIdentifiers(astBody)
-        return findExportNames(astBody, moduleExportsAliases, absoluteFilePath, rootIdentifiers)
+        return findExportNames(astBody, fileContent, moduleExportsAliases, absoluteFilePath, rootIdentifiers)
     } catch (error) {
         const name = chalk.bold.bgRedBright.whiteBright('ERROR')
         let message = `Parsing file ${absoluteFilePath}. `
@@ -72,11 +73,11 @@ export default findExports
 export function guessDefaultExport(absoluteFilePath: string) {
     // try to assing a default export name when none was found but a default export exists
     let { dir, name } = parse(absoluteFilePath)
-    while (GENERIC_NAMES.some(ignore => name === ignore)) {
+    do {
         const pathInfo = parse(dir)
         name = pathInfo.name
         dir = pathInfo.dir
-    }
+    } while (IGNORE_FILENAMES.has(name))
     return camelcase(name)
 }
 
@@ -141,11 +142,12 @@ function findRootObjectIdentifiers(body: Babel.Statement[]) {
             }
             const objectName = getIdName(object)
             if (objectName) {
+                const propName = property.type === 'StringLiteral' ? property.value : getIdName(property)
                 if (rootIdentifiers.has(objectName)) {
                     const names = rootIdentifiers.get(objectName)
-                    Array.isArray(names) && names.push(getIdName(property))
+                    Array.isArray(names) && names.push(propName)
                 } else {
-                    rootIdentifiers.set(objectName, [getIdName(property)])
+                    rootIdentifiers.set(objectName, [propName])
                 }
             }
         }
@@ -172,6 +174,7 @@ function findRootObjectIdentifiers(body: Babel.Statement[]) {
 
 function findExportNames(
     body: Babel.Statement[],
+    fileContent: string,
     moduleExportsAliases: Set<string>,
     absoluteFilePath: string,
     rootIdentifiers: Map<string, string | string[]>
@@ -183,12 +186,34 @@ function findExportNames(
         addESExports(moduleExports, statement)
         addCJSExports(moduleExports, statement, moduleExportsAliases, absoluteFilePath, rootIdentifiers)
     })
+    addRegexExports(moduleExports, fileContent)
+    moduleExports.namedExports = moduleExports.namedExports.filter(name => !IGNORE_EXPORT_NAMES.has(name))
+    moduleExports.namedExports = Array.from(new Set(moduleExports.namedExports))
     // try to assing a default export name when none was found but a default export exists
-    if (moduleExports.hasDefaultExport && !moduleExports.defaultExportName) {
+    if (moduleExports.hasDefaultExport && !moduleExports.defaultExportName && !moduleExports.namedExports.length) {
         moduleExports.defaultExportName = guessDefaultExport(absoluteFilePath)
     }
-    // filter out common __esModule interop export
-    moduleExports.namedExports = moduleExports.namedExports.filter(name => name !== '__esModule')
+    // filter out irrelevant interop exports names
+    return moduleExports
+}
+
+function addRegexExports(moduleExports: ModuleExports, fileContent: string) {
+    if (!moduleExports.namedExports.length) {
+        const namedExportsRegex = /(?:module.)?exports.([\w\d]+)\s*=\s*[\w\d]{2,}/gm
+        let namedExportsMatch
+        while ((namedExportsMatch = namedExportsRegex.exec(fileContent)) != null) {
+            const name = namedExportsMatch[1]
+            name !== 'default' && moduleExports.namedExports.push(name)
+        }
+        if (!moduleExports.hasDefaultExport || !moduleExports.defaultExportName) {
+            const defaultExportsRegex = /(?:module.)?exports(?:.default)?\s*=\s*([\w\d]{2,})/gm
+            const defaultExportsMatch = defaultExportsRegex.exec(fileContent)
+            if (defaultExportsMatch && !IGNORE_EXPORT_NAMES.has(defaultExportsMatch[1])) {
+                moduleExports.hasDefaultExport = true
+                moduleExports.defaultExportName = defaultExportsMatch[1]
+            }
+        }
+    }
     return moduleExports
 }
 
@@ -349,11 +374,11 @@ function addCJSExportsInAssignment(
         }
         const objectName = getIdName(object)
         if (objectName && property) {
-            const propName = getIdName(property)
+            const propName = property.type === 'StringLiteral' ? property.value : getIdName(property)
             // module.exports.foo =
             const name =
                 parentProperty && moduleExportsAliases.has(`${objectName}.${propName}`)
-                    ? getIdName(parentProperty)
+                    ? parentProperty.type === 'StringLiteral' ? parentProperty.value : getIdName(parentProperty)
                     : // exports.foo = ...
                       moduleExportsAliases.has(objectName) ? propName : undefined
             // module.exports.default = foo
