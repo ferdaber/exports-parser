@@ -5,7 +5,9 @@ import chalk from 'chalk'
 const { resolve } = require('path')
 const { readFile, readdir } = require('fs')
 const { argv } = require('yargs')
+
 const { findExports, guessDefaultExport } = require('./index')
+const { report, warn } = require('./helpers')
 
 const { _, nodeModules, dependenciesOnly, noDevDependencies } = argv
 
@@ -30,10 +32,6 @@ if (nodeModules) {
     parse(modulePath || filePath)
 }
 
-function warn(message) {
-    return chalk.bgYellowBright.black.bold('WARN') + ' ' + message
-}
-
 function requireResolveHere(modulePath) {
     return requireResolve.sync(modulePath, { basedir: process.cwd() })
 }
@@ -51,16 +49,7 @@ function parse(filePath) {
     const resolvedFilePath = resolve(filePath)
     const isJson = /.json$/.test(resolvedFilePath)
     readFile(resolvedFilePath, 'utf8', (err, fileContent) => {
-        const { defaultExportName, hasDefaultExport, namedExports } = findExports(fileContent, resolvedFilePath, isJson)
-        console.log(chalk.bold(`Results for ${resolvedFilePath}:`))
-        console.log(
-            hasDefaultExport
-                ? defaultExportName
-                  ? chalk.bold('Default export: ') + defaultExportName
-                  : warn('No default export name')
-                : warn('No default export found, best guess is: ' + guessDefaultExport(resolvedFilePath))
-        )
-        console.log(chalk.bold('Named exports:'), namedExports)
-        console.log('\n')
+        const moduleExports = findExports(fileContent, resolvedFilePath, isJson)
+        report(moduleExports, resolvedFilePath)
     })
 }

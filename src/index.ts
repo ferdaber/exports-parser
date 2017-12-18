@@ -7,6 +7,7 @@ import { parse } from 'path'
 
 import { parseWithBabel } from './babel-parse'
 import { flatten } from './helpers'
+export { report } from './helpers'
 import {
     declarationTypeNameSwitchMap,
     expressionTypeNameSwitchMap,
@@ -17,12 +18,6 @@ import {
     isIdentifierNamed,
     isMemberExpressionAccessing
 } from './babel-helpers'
-
-interface ModuleExports {
-    namedExports: string[]
-    hasDefaultExport?: boolean
-    defaultExportName?: string
-}
 
 type ExportDefaultDeclarationType = Babel.ExportDefaultDeclaration['declaration']
 
